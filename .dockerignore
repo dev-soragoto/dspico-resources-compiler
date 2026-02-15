@@ -1,0 +1,5 @@
+inputs
+outputs
+*.pyc
+__pycache__
+.git

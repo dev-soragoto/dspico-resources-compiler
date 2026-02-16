@@ -101,9 +101,21 @@ copy_if_exists() {
   fi
 }
 
+# Compute total step count based on enabled features.
+compute_steps() {
+  TOTAL_STEPS=9
+  [ "${ENABLE_WRFUXXED:-0}" != "1" ] || true  # wrfuxxed is already step 4
+  if [ "${ENABLE_NTRBOOT:-0}" = "1" ]; then
+    TOTAL_STEPS=$((TOTAL_STEPS + 1))
+  fi
+}
+
 # Create the output directory tree.
 setup_dirs() {
   local dirs="dldi bootloader encryptor firmware pico-loader pico-launcher wrfuxxed"
+  if [ "${ENABLE_NTRBOOT:-0}" = "1" ]; then
+    dirs="$dirs ntrboot"
+  fi
   mkdir -p "$OUT_BASE"
   for d in $dirs; do
     mkdir -p "$OUT_BASE/$d"
@@ -118,7 +130,7 @@ setup_dirs() {
 
 step_dldi() {
   local repo=/tmp/dspico-dldi
-  step "1/9" "Build DSpico DLDI"
+  step "1/$TOTAL_STEPS" "Build DSpico DLDI"
 
   clone_repo https://github.com/LNH-team/dspico-dldi.git "$repo"
   build
@@ -135,7 +147,7 @@ step_dldi() {
 
 step_bootloader() {
   local repo=/tmp/dspico-bootloader
-  step "2/9" "Build DSpico Bootloader"
+  step "2/$TOTAL_STEPS" "Build DSpico Bootloader"
 
   clone_repo https://github.com/LNH-team/dspico-bootloader.git "$repo"
   git submodule update --init
@@ -160,7 +172,7 @@ step_bootloader() {
 step_encryptor() {
   local repo=/tmp/DSRomEncryptor
   local bin_dir="$repo/DSRomEncryptor/bin/Debug/net9.0"
-  step "3/9" "Build DSRomEncryptor"
+  step "3/$TOTAL_STEPS" "Build DSRomEncryptor"
 
   clone_repo https://github.com/Gericom/DSRomEncryptor "$repo"
   dotnet build -c Debug || error_exit "DSRomEncryptor build failed"
@@ -205,7 +217,7 @@ step_encryptor() {
 # ── [4/9] WRFUxxed (optional) ────────────────────────────────────────────────
 
 step_wrfuxxed() {
-  step "4/9" "Build WRFUxxed (optional)"
+  step "4/$TOTAL_STEPS" "Build WRFUxxed (optional)"
 
   if [ "${ENABLE_WRFUXXED:-0}" != "1" ]; then
     warn "⊗ Skipped (set ENABLE_WRFUXXED=1 to enable)"
@@ -229,13 +241,13 @@ step_wrfuxxed() {
 
 step_firmware() {
   local repo=/tmp/dspico-firmware
-  step "5/9" "Build DSpico Firmware"
+  step "5/$TOTAL_STEPS" "Build DSpico Firmware"
 
   clone_repo https://github.com/LNH-team/dspico-firmware "$repo"
   git submodule update --init
   (cd pico-sdk && git submodule update --init)
 
-  # Inject encrypted bootloader
+  # Normal mode: inject encrypted bootloader
   [ -f "$ENCRYPTED_NDS" ] || error_exit "default.nds not available"
   cp -v "$ENCRYPTED_NDS" "$repo/roms/default.nds"
 
@@ -260,11 +272,55 @@ step_firmware() {
   info "✓ Firmware built"
 }
 
+# ── [extra] Firmware ntrboot variant ──────────────────────────────────────────
+# Rebuilds the firmware with ntrboot ROMs, producing DSpico_ntrboot.uf2.
+# Reuses the already-cloned repo at /tmp/dspico-firmware.
+
+step_firmware_ntrboot() {
+  local repo=/tmp/dspico-firmware
+  step "$TOTAL_STEPS/$TOTAL_STEPS" "Build DSpico Firmware (ntrboot variant)"
+
+  cd "$repo"
+
+  # Validate ntrboot ROMs
+  [ -f /inputs/ntrboot/default.nds ] || \
+    error_exit "3DS ntrboot ROM not found at inputs/ntrboot/default.nds"
+
+  # Clean previous build and ROMs
+  rm -rf build
+  rm -f roms/default.nds roms/dsimode.nds
+  rm -f data/uartBufv060.bin
+
+  # Disable WRFUxxed define for ntrboot build (re-comment if it was enabled)
+  sed -i 's/^\(\s*\)\(.*DSPICO_ENABLE_WRFUXXED.*\)/\1# \2/' CMakeLists.txt 2>/dev/null || true
+
+  # Inject ntrboot ROMs (pre-built, no encryption needed)
+  cp -v /inputs/ntrboot/default.nds "$repo/roms/default.nds"
+
+  if [ -f /inputs/ntrboot/dsimode.nds ]; then
+    cp -v /inputs/ntrboot/dsimode.nds "$repo/roms/dsimode.nds"
+    info "  DSi ntrboot ROM included"
+  else
+    warn "⚠ inputs/ntrboot/dsimode.nds not found (DSi ntrboot will not be available)"
+  fi
+
+  chmod +x compile.sh
+  ./compile.sh || error_exit "Firmware compilation failed (ntrboot variant)"
+
+  # Copy with distinct name
+  local uf2
+  uf2=$(find_artifact "$repo/build" "*.uf2")
+  cp -v "$uf2" "$OUT_BASE/ntrboot/DSpico_ntrboot.uf2"
+
+  write_build_info "$repo" "$OUT_BASE/ntrboot" "dspico-firmware (ntrboot)"
+  info "✓ ntrboot firmware variant built: DSpico_ntrboot.uf2"
+}
+
 # ── [6/9] Pico Loader ────────────────────────────────────────────────────────
 
 step_pico_loader() {
   local repo=/tmp/pico-loader
-  step "6/9" "Build Pico Loader"
+  step "6/$TOTAL_STEPS" "Build Pico Loader"
 
   clone_repo https://github.com/LNH-team/pico-loader "$repo" --recursive
   build
@@ -287,7 +343,7 @@ step_pico_loader() {
 
 step_pico_launcher() {
   local repo=/tmp/pico-launcher
-  step "7/9" "Build Pico Launcher"
+  step "7/$TOTAL_STEPS" "Build Pico Launcher"
 
   clone_repo https://github.com/LNH-team/pico-launcher "$repo"
   git submodule update --init
@@ -306,7 +362,7 @@ step_pico_launcher() {
 # ── [8/9] Assemble SD card ───────────────────────────────────────────────────
 
 step_assemble_sd() {
-  step "8/9" "Assemble SD card structure"
+  step "8/$TOTAL_STEPS" "Assemble SD card structure"
 
   local sd="$OUT_BASE/sd_card"
   rm -rf "$sd"
@@ -344,6 +400,7 @@ step_assemble_sd() {
 # =============================================================================
 
 main() {
+  compute_steps
   setup_dirs
   [ -f /opt/wonderful/bin/wf-env ] && . /opt/wonderful/bin/wf-env || true
 
@@ -356,9 +413,18 @@ main() {
   step_pico_launcher
   step_assemble_sd
 
-  step "9/9" "Build complete!"
+  # Build ntrboot firmware variant if enabled
+  if [ "${ENABLE_NTRBOOT:-0}" = "1" ]; then
+    step_firmware_ntrboot
+  fi
+
+  echo ""
   info "════════════════════════════════════════"
   info "  All components built successfully!"
+  if [ "${ENABLE_NTRBOOT:-0}" = "1" ]; then
+    info "  Firmware:  outputs/dspico/firmware/DSpico.uf2"
+    info "  ntrboot:   outputs/dspico/ntrboot/DSpico_ntrboot.uf2"
+  fi
   info "════════════════════════════════════════"
   echo "Outputs: $OUT_BASE"
 }

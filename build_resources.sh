@@ -16,6 +16,7 @@ docker run --rm \
   -v "$OUTPUT_DIR":/outputs \
   -v "$SCRIPT_DIR/compile_resources.sh":/dspico/compile_resources.sh:ro \
   -e ENABLE_WRFUXXED="${ENABLE_WRFUXXED:-0}" \
+  -e ENABLE_NTRBOOT="${ENABLE_NTRBOOT:-0}" \
   --entrypoint bash \
   "$IMAGE_NAME" -lc '/dspico/compile_resources.sh'
 

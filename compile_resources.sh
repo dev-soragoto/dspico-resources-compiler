@@ -28,6 +28,7 @@ NC='\033[0m'
 DLDI_FILE=""
 BOOTLOADER_NDS=""
 ENCRYPTED_NDS=""
+ENCRYPTOR_BIN=""
 
 # =============================================================================
 #  Utility functions
@@ -99,6 +100,31 @@ copy_if_exists() {
   if [ -e "$1" ]; then
     cp -v "$1" "$2"
   fi
+}
+
+# Encrypt an NDS ROM using DSRomEncryptor (inserts blowfish tables + encrypts secure area).
+# Automatically pads ROMs smaller than 32KB, as DSRomEncryptor writes test patterns
+# (0x3000-0x3FFF) and processes the secure area (0x4000-0x8000).
+encrypt_rom() {
+  local input="$1" output="$2"
+  [ -n "$ENCRYPTOR_BIN" ] || error_exit "DSRomEncryptor not available (did step_encryptor run?)"
+
+  # DSRomEncryptor requires at least 0x8000 (32768) bytes for secure area processing.
+  local work_input="$input"
+  local rom_size
+  rom_size=$(stat -c%s "$input")
+  if [ "$rom_size" -lt 32768 ]; then
+    work_input="/tmp/$(basename "$input" .nds)_padded.nds"
+    cp "$input" "$work_input"
+    truncate -s 32768 "$work_input"
+    warn "⚠ Padded ROM from ${rom_size} to 32768 bytes for encryption"
+  fi
+
+  case "$ENCRYPTOR_BIN" in
+    *.dll) dotnet "$ENCRYPTOR_BIN" "$work_input" "$output" ;;
+    *)     "$ENCRYPTOR_BIN" "$work_input" "$output" ;;
+  esac || error_exit "Encryption failed for $(basename "$input")"
+  [ -f "$output" ] || error_exit "Encrypted ROM not produced: $output"
 }
 
 # Compute total step count based on enabled features.
@@ -197,17 +223,18 @@ step_encryptor() {
   [ "$ntr_ok" -eq 1 ] || error_exit "NTR Blowfish not found (need ntrBlowfish.bin or biosnds7.rom in inputs/blowfish/)"
   [ "$twl_ok" -eq 1 ] || warn "⚠ TWL Blowfish not found (twlBlowfish.bin or biosdsi7.rom)"
 
-  # Encrypt bootloader
-  ENCRYPTED_NDS="$repo/default.nds"
+  # Locate encryptor binary for reuse in later steps
   if [ -f "$bin_dir/DSRomEncryptor" ]; then
-    "$bin_dir/DSRomEncryptor" "$BOOTLOADER_NDS" "$ENCRYPTED_NDS" || error_exit "Encryption failed"
+    ENCRYPTOR_BIN="$bin_dir/DSRomEncryptor"
   elif [ -f "$bin_dir/DSRomEncryptor.dll" ]; then
-    dotnet "$bin_dir/DSRomEncryptor.dll" "$BOOTLOADER_NDS" "$ENCRYPTED_NDS" || error_exit "Encryption failed"
+    ENCRYPTOR_BIN="$bin_dir/DSRomEncryptor.dll"
   else
     error_exit "DSRomEncryptor executable not found in $bin_dir"
   fi
 
-  [ -f "$ENCRYPTED_NDS" ] || error_exit "default.nds was not created"
+  # Encrypt bootloader
+  ENCRYPTED_NDS="$repo/default.nds"
+  encrypt_rom "$BOOTLOADER_NDS" "$ENCRYPTED_NDS"
   cp -v "$ENCRYPTED_NDS" "$OUT_BASE/encryptor/"
 
   write_build_info "$repo" "$OUT_BASE/encryptor" "DSRomEncryptor"
@@ -259,7 +286,8 @@ step_firmware() {
       warn "⚠ /inputs/wrfuxxed/dsimode.nds not found"
     fi
     copy_if_exists /tmp/dspico-wrfuxxed/uartBufv060.bin "$repo/data/uartBufv060.bin"
-    sed -i 's/^#\s*\(.*DSPICO_ENABLE_WRFUXXED.*\)/\1/' CMakeLists.txt || true
+    # Uncomment DSPICO_ENABLE_WRFUXXED (line has leading whitespace: "  #DSPICO_ENABLE_WRFUXXED")
+    sed -i 's/^\(\s*\)#\s*\(DSPICO_ENABLE_WRFUXXED\)/\1\2/' CMakeLists.txt || true
   fi
 
   chmod +x compile.sh
@@ -272,17 +300,30 @@ step_firmware() {
   info "✓ Firmware built"
 }
 
-# ── [extra] Firmware ntrboot variant ──────────────────────────────────────────
-# Rebuilds the firmware with ntrboot ROMs, producing DSpico_ntrboot.uf2.
+# ── [extra] Firmware ntrboot variants ─────────────────────────────────────────
+# Rebuilds the firmware with ntrboot ROMs, producing separate .uf2 files
+# for 3DS and DSi. Both ntrboot modes use the default.nds slot because the
+# firmware serves dsimode.nds to both DSi AND 3DS (both are "DSi mode"),
+# so 3DS and DSi ntrboot payloads cannot coexist in one build.
 # Reuses the already-cloned repo at /tmp/dspico-firmware.
 
 step_firmware_ntrboot() {
   local repo=/tmp/dspico-firmware
-  step "$TOTAL_STEPS/$TOTAL_STEPS" "Build DSpico Firmware (ntrboot variant)"
+  local ntrboot_step_base="${TOTAL_STEPS}"
+
+  # Determine how many ntrboot builds we'll do
+  local has_dsi=0
+  [ -f /inputs/ntrboot/dsimode.nds ] && has_dsi=1
+
+  # ── 3DS ntrboot (required) ──────────────────────────────────────────────
+  if [ "$has_dsi" = "1" ]; then
+    step "$ntrboot_step_base/$((TOTAL_STEPS + 1))" "Build DSpico Firmware (3DS ntrboot)"
+  else
+    step "$ntrboot_step_base/$TOTAL_STEPS" "Build DSpico Firmware (3DS ntrboot)"
+  fi
 
   cd "$repo"
 
-  # Validate ntrboot ROMs
   [ -f /inputs/ntrboot/default.nds ] || \
     error_exit "3DS ntrboot ROM not found at inputs/ntrboot/default.nds"
 
@@ -292,28 +333,46 @@ step_firmware_ntrboot() {
   rm -f data/uartBufv060.bin
 
   # Disable WRFUxxed define for ntrboot build (re-comment if it was enabled)
-  sed -i 's/^\(\s*\)\(.*DSPICO_ENABLE_WRFUXXED.*\)/\1# \2/' CMakeLists.txt 2>/dev/null || true
+  sed -i 's/^\(\s*\)\(DSPICO_ENABLE_WRFUXXED\)/\1#\2/' CMakeLists.txt 2>/dev/null || true
 
-  # Inject ntrboot ROMs (pre-built, no encryption needed)
-  cp -v /inputs/ntrboot/default.nds "$repo/roms/default.nds"
-
-  if [ -f /inputs/ntrboot/dsimode.nds ]; then
-    cp -v /inputs/ntrboot/dsimode.nds "$repo/roms/dsimode.nds"
-    info "  DSi ntrboot ROM included"
-  else
-    warn "⚠ inputs/ntrboot/dsimode.nds not found (DSi ntrboot will not be available)"
-  fi
+  # Encrypt and inject 3DS ntrboot ROM into default.nds
+  # DSRomEncryptor inserts blowfish key tables and encrypts the secure area,
+  # which is required for the NTR card protocol handshake to succeed.
+  local encrypted_3ds="/tmp/ntrboot_3ds_encrypted.nds"
+  encrypt_rom /inputs/ntrboot/default.nds "$encrypted_3ds"
+  cp -v "$encrypted_3ds" "$repo/roms/default.nds"
 
   chmod +x compile.sh
-  ./compile.sh || error_exit "Firmware compilation failed (ntrboot variant)"
+  ./compile.sh || error_exit "Firmware compilation failed (3DS ntrboot)"
 
-  # Copy with distinct name
   local uf2
   uf2=$(find_artifact "$repo/build" "*.uf2")
-  cp -v "$uf2" "$OUT_BASE/ntrboot/DSpico_ntrboot.uf2"
+  cp -v "$uf2" "$OUT_BASE/ntrboot/DSpico_ntrboot_3ds.uf2"
+  info "✓ 3DS ntrboot firmware built: DSpico_ntrboot_3ds.uf2"
+
+  # ── DSi ntrboot (optional) ─────────────────────────────────────────────
+  if [ "$has_dsi" = "1" ]; then
+    step "$((ntrboot_step_base + 1))/$((TOTAL_STEPS + 1))" "Build DSpico Firmware (DSi ntrboot)"
+
+    # Clean build, swap ROM
+    rm -rf build
+    rm -f roms/default.nds roms/dsimode.nds
+
+    # Encrypt and inject DSi ntrboot ROM
+    local encrypted_dsi="/tmp/ntrboot_dsi_encrypted.nds"
+    encrypt_rom /inputs/ntrboot/dsimode.nds "$encrypted_dsi"
+    cp -v "$encrypted_dsi" "$repo/roms/default.nds"
+
+    ./compile.sh || error_exit "Firmware compilation failed (DSi ntrboot)"
+
+    uf2=$(find_artifact "$repo/build" "*.uf2")
+    cp -v "$uf2" "$OUT_BASE/ntrboot/DSpico_ntrboot_dsi.uf2"
+    info "✓ DSi ntrboot firmware built: DSpico_ntrboot_dsi.uf2"
+  else
+    warn "⊗ DSi ntrboot skipped (inputs/ntrboot/dsimode.nds not found)"
+  fi
 
   write_build_info "$repo" "$OUT_BASE/ntrboot" "dspico-firmware (ntrboot)"
-  info "✓ ntrboot firmware variant built: DSpico_ntrboot.uf2"
 }
 
 # ── [6/9] Pico Loader ────────────────────────────────────────────────────────
@@ -422,8 +481,11 @@ main() {
   info "════════════════════════════════════════"
   info "  All components built successfully!"
   if [ "${ENABLE_NTRBOOT:-0}" = "1" ]; then
-    info "  Firmware:  outputs/dspico/firmware/DSpico.uf2"
-    info "  ntrboot:   outputs/dspico/ntrboot/DSpico_ntrboot.uf2"
+    info "  Firmware:      outputs/dspico/firmware/DSpico.uf2"
+    info "  ntrboot 3DS:   outputs/dspico/ntrboot/DSpico_ntrboot_3ds.uf2"
+    if [ -f "$OUT_BASE/ntrboot/DSpico_ntrboot_dsi.uf2" ]; then
+      info "  ntrboot DSi:   outputs/dspico/ntrboot/DSpico_ntrboot_dsi.uf2"
+    fi
   fi
   info "════════════════════════════════════════"
   echo "Outputs: $OUT_BASE"

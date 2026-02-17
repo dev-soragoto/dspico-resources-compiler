@@ -112,66 +112,35 @@ The LNH-team firmware has **2 ROM slots** (`default.nds` + `dsimode.nds`), so th
 
 | File | Destination | Description |
 |------|-------------|-------------|
-<<<<<<< Updated upstream
-| 3DS ntrboot ROM | `inputs/ntrboot/default.nds` | **Required.** NDS ROM with header + NTR blowfish keys + boot9strap firm. |
-| DSi ntrboot ROM (GCD) | `inputs/ntrboot/dsimode.nds` | **Optional.** GCD-signed NDS ROM with GCD blowfish keys. Only needed for DSi ntrboot. |
-
-#### How to obtain the ntrboot ROMs
-
-**3DS ntrboot ROM (`default.nds`):**
-
-This is a specially crafted NDS ROM containing the boot9strap payload. The ROM consists of a header, NTR blowfish keys, and the boot9strap firm.
-
-1. Download `boot9strap_ntr.zip` from the [boot9strap releases](https://github.com/SciresM/boot9strap/releases) (contains `boot9strap_ntr.firm`)
-2. The firm must be packed into the NDS format that DSpico expects (header + blowfish keys + firm). Check the [dspico-firmware](https://github.com/LNH-team/dspico-firmware) repository or the [DSpico Discord](https://discord.gg/dspico) for:
-   - A pre-built ntrboot NDS ROM ready for DSpico
-   - Or a tool/instructions to build it from `boot9strap_ntr.firm`
-3. The [3DS Hacks Guide ntrboot page](https://3ds.hacks.guide/ntrboot) has general information about the ntrboot process
-
-**DSi ntrboot ROM (`dsimode.nds`):**
-
-This is a GCD (Game Card Developer) signed NDS ROM used for the DSi ntrboot exploit. It is more specialized than the 3DS variant.
-
-1. The ROM must contain **GCD blowfish keys** and be **properly signed**
-2. Check the [DSpico Discord](https://discord.gg/dspico) or the [DS(i) Mode Hacking](https://discord.gg/yD3spjv) Discord for pre-built GCD ROMs compatible with DSpico
-3. The [DSi CFW Guide](https://dsi.cfw.guide/) has general information about DSi exploits
-
-> ⚠️ **DSi ntrboot requires USB power:** The DSpico must be powered via USB (e.g., connected to a PC or USB charger) so the firmware boots **before** the DSi starts its ntrboot sequence. Without external power, the firmware does not boot fast enough.
-=======
-| `boot9strap_ntr.firm` | `inputs/ntrboot/boot9strap_ntr.firm` | **3DS ntrboot.** Raw FIRM placed into the `default.nds` slot → separate `DSpico_ntrboot_3ds.uf2`. |
-| `default.gcd` | `inputs/ntrboot/default.gcd` | **DSi ntrboot.** GCD-signed ROM placed into the `default.nds` slot → separate `DSpico_ntrboot_dsi.uf2`. |
-
-> Each ntrboot variant is built as a **separate firmware** since only 2 ROM slots are available. The ntrboot file is copied directly into `roms/default.nds` — no encryption needed.
+| `boot9strap_ntr.firm` | `inputs/ntrboot/boot9strap_ntr.firm` | **3DS ntrboot.** Raw, unmodified FIRM from boot9strap releases. Automatically converted to NDS format during build. |
+| `default.gcd` | `inputs/ntrboot/default.gcd` | **DSi ntrboot.** GCD-signed ROM. Only needed for DSi ntrboot. |
 
 #### How to obtain the files
 
 **3DS — `boot9strap_ntr.firm`:**
 1. Download `boot9strap_ntr.zip` from [boot9strap releases](https://github.com/SciresM/boot9strap/releases) (**v1.3** — not v1.4, as per [3ds.hacks.guide](https://3ds.hacks.guide/))
 2. Extract `boot9strap_ntr.firm` from the zip
-3. SHA1: `26bf0b603ec1c72fa648b27c5d547de05d447748`
+3. Place the **unmodified** `.firm` file in `inputs/ntrboot/` — do **not** modify it or convert it manually
+4. SHA1: `26bf0b603ec1c72fa648b27c5d547de05d447748`
+
+> The build system automatically converts `boot9strap_ntr.firm` to NDS format using [firm-to-nds-dspico](https://github.com/amt911/firm-to-nds-dspico) (prepends the required NDS header).
 
 **DSi — `default.gcd`:**
 1. Check the [DSpico Discord](https://discord.gg/dspico) or the [DS(i) Mode Hacking](https://discord.gg/yD3spjv) Discord
 2. SHA1: `eca89918bbff86090a43e67f2805d9743e2ac343`
 
 > ⚠️ **DSi ntrboot requires USB power:** The DSpico must be powered via USB (e.g., connected to a PC or USB charger) so the firmware boots **before** the DSi starts its ntrboot sequence.
->>>>>>> Stashed changes
 
 #### ntrboot setup and build
 
 ```bash
 mkdir -p inputs/ntrboot
-<<<<<<< Updated upstream
-cp /path/to/your/3ds_ntrboot.nds inputs/ntrboot/default.nds
-cp /path/to/your/dsi_gcd_rom.nds inputs/ntrboot/dsimode.nds  # optional, for DSi
-=======
 
-# 3DS ntrboot
+# 3DS ntrboot (raw .firm file, converted automatically)
 cp /path/to/boot9strap_ntr.firm inputs/ntrboot/
 
 # DSi ntrboot (optional)
 cp /path/to/default.gcd inputs/ntrboot/
->>>>>>> Stashed changes
 ```
 
 **Build with everything (recommended):**
@@ -279,13 +248,8 @@ Complete reference of all files you may need to provide:
 | NTR Blowfish | `inputs/blowfish/ntrBlowfish.bin` | Alt. to BIOS | 4256 bytes, extracted blowfish table |
 | TWL Blowfish | `inputs/blowfish/twlBlowfish.bin` | Alt. to BIOS | 4096 bytes, extracted blowfish table |
 | WRFU Tester v0.60 | `inputs/wrfuxxed/dsimode.nds` | If `ENABLE_WRFUXXED=1` | WRFUxxed exploit ROM |
-<<<<<<< Updated upstream
-| 3DS ntrboot ROM | `inputs/ntrboot/default.nds` | If `ENABLE_NTRBOOT=1` | boot9strap payload in NDS format |
-| DSi ntrboot ROM | `inputs/ntrboot/dsimode.nds` | Optional | GCD-signed ROM for DSi ntrboot |
-=======
-| boot9strap NTR FIRM | `inputs/ntrboot/boot9strap_ntr.firm` | If `ENABLE_NTRBOOT=1` (3DS) | Raw FIRM, copied as-is into firmware |
+| boot9strap NTR FIRM | `inputs/ntrboot/boot9strap_ntr.firm` | If `ENABLE_NTRBOOT=1` (3DS) | Raw, unmodified FIRM — automatically converted to NDS format |
 | DSi ntrboot GCD ROM | `inputs/ntrboot/default.gcd` | If `ENABLE_NTRBOOT=1` (DSi) | GCD-signed ROM, copied as-is into firmware |
->>>>>>> Stashed changes
 
 ## Troubleshooting
 
@@ -312,15 +276,12 @@ Complete reference of all files you may need to provide:
 - Verify SHA1: `eca89918bbff86090a43e67f2805d9743e2ac343`
 
 ### ❌ ntrboot not working on 3DS
-<<<<<<< Updated upstream
-- Verify `inputs/ntrboot/default.nds` contains the correct ntrboot payload (header + blowfish keys + firm)
-- Try re-downloading the boot9strap ntr release
-=======
+- Verify `inputs/ntrboot/boot9strap_ntr.firm` is the **unmodified** raw FIRM file from boot9strap releases
+- Do **not** manually convert or modify the `.firm` file — the build system handles the conversion automatically
 - Make sure you have `boot9strap_ntr.firm` (the **NTR** variant, not regular `boot9strap.firm`)
 - Use **v1.3** from [boot9strap releases](https://github.com/SciresM/boot9strap/releases) (not v1.4)
 - Verify SHA1: `26bf0b603ec1c72fa648b27c5d547de05d447748`
 - The file must be at `inputs/ntrboot/boot9strap_ntr.firm`
->>>>>>> Stashed changes
 
 ### ❌ "Failed to mount SD card" (blue screen)
 - SD card may be corrupted or incompatible
@@ -368,6 +329,7 @@ This script automatically clones and builds:
 5. [dspico-firmware](https://github.com/LNH-team/dspico-firmware) - Raspberry Pi Pico firmware
 6. [pico-loader](https://github.com/LNH-team/pico-loader) - Game loader
 7. [pico-launcher](https://github.com/LNH-team/pico-launcher) - UI launcher
+8. [firm-to-nds-dspico](https://github.com/amt911/firm-to-nds-dspico) - FIRM to NDS converter (for ntrboot)
 
 ## License
 

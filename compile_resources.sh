@@ -181,8 +181,8 @@ step_bootloader() {
 
   # Try BOOTLOADER.nds first, fall back to any .nds
   BOOTLOADER_NDS=$(find "$repo" -maxdepth 2 -name "BOOTLOADER.nds" -type f | head -n 1)
-  [ -n "$BOOTLOADER_NDS" ] || \
-    BOOTLOADER_NDS=$(find "$repo" -maxdepth 2 -name "*.nds" -type f | head -n 1)
+  # [ -n "$BOOTLOADER_NDS" ] || \
+    # BOOTLOADER_NDS=$(find "$repo" -maxdepth 2 -name "*.nds" -type f | head -n 1)
   [ -n "$BOOTLOADER_NDS" ] || error_exit "No bootloader .nds file produced"
 
   [ -x "$DLDITOOL" ] || error_exit "DLDITOOL not found at: $DLDITOOL"
@@ -201,7 +201,7 @@ step_encryptor() {
   step "3/$TOTAL_STEPS" "Build DSRomEncryptor"
 
   clone_repo https://github.com/Gericom/DSRomEncryptor "$repo"
-  dotnet build -c Debug || error_exit "DSRomEncryptor build failed"
+  dotnet build || error_exit "DSRomEncryptor build failed"
   [ -d "$bin_dir" ] || error_exit "Build output not found at $bin_dir"
 
   # Copy Blowfish tables from inputs
@@ -298,81 +298,6 @@ step_firmware() {
 
   write_build_info "$repo" "$OUT_BASE/firmware" "dspico-firmware"
   info "✓ Firmware built"
-}
-
-# ── [extra] Firmware ntrboot variants ─────────────────────────────────────────
-# Rebuilds the firmware with ntrboot ROMs, producing separate .uf2 files
-# for 3DS and DSi. Both ntrboot modes use the default.nds slot because the
-# firmware serves dsimode.nds to both DSi AND 3DS (both are "DSi mode"),
-# so 3DS and DSi ntrboot payloads cannot coexist in one build.
-# Reuses the already-cloned repo at /tmp/dspico-firmware.
-
-step_firmware_ntrboot() {
-  local repo=/tmp/dspico-firmware
-  local ntrboot_step_base="${TOTAL_STEPS}"
-
-  # Determine how many ntrboot builds we'll do
-  local has_dsi=0
-  [ -f /inputs/ntrboot/dsimode.nds ] && has_dsi=1
-
-  # ── 3DS ntrboot (required) ──────────────────────────────────────────────
-  if [ "$has_dsi" = "1" ]; then
-    step "$ntrboot_step_base/$((TOTAL_STEPS + 1))" "Build DSpico Firmware (3DS ntrboot)"
-  else
-    step "$ntrboot_step_base/$TOTAL_STEPS" "Build DSpico Firmware (3DS ntrboot)"
-  fi
-
-  cd "$repo"
-
-  [ -f /inputs/ntrboot/default.nds ] || \
-    error_exit "3DS ntrboot ROM not found at inputs/ntrboot/default.nds"
-
-  # Clean previous build and ROMs
-  rm -rf build
-  rm -f roms/default.nds roms/dsimode.nds
-  rm -f data/uartBufv060.bin
-
-  # Disable WRFUxxed define for ntrboot build (re-comment if it was enabled)
-  sed -i 's/^\(\s*\)\(DSPICO_ENABLE_WRFUXXED\)/\1#\2/' CMakeLists.txt 2>/dev/null || true
-
-  # Encrypt and inject 3DS ntrboot ROM into default.nds
-  # DSRomEncryptor inserts blowfish key tables and encrypts the secure area,
-  # which is required for the NTR card protocol handshake to succeed.
-  local encrypted_3ds="/tmp/ntrboot_3ds_encrypted.nds"
-  encrypt_rom /inputs/ntrboot/default.nds "$encrypted_3ds"
-  cp -v "$encrypted_3ds" "$repo/roms/default.nds"
-
-  chmod +x compile.sh
-  ./compile.sh || error_exit "Firmware compilation failed (3DS ntrboot)"
-
-  local uf2
-  uf2=$(find_artifact "$repo/build" "*.uf2")
-  cp -v "$uf2" "$OUT_BASE/ntrboot/DSpico_ntrboot_3ds.uf2"
-  info "✓ 3DS ntrboot firmware built: DSpico_ntrboot_3ds.uf2"
-
-  # ── DSi ntrboot (optional) ─────────────────────────────────────────────
-  if [ "$has_dsi" = "1" ]; then
-    step "$((ntrboot_step_base + 1))/$((TOTAL_STEPS + 1))" "Build DSpico Firmware (DSi ntrboot)"
-
-    # Clean build, swap ROM
-    rm -rf build
-    rm -f roms/default.nds roms/dsimode.nds
-
-    # Encrypt and inject DSi ntrboot ROM
-    local encrypted_dsi="/tmp/ntrboot_dsi_encrypted.nds"
-    encrypt_rom /inputs/ntrboot/dsimode.nds "$encrypted_dsi"
-    cp -v "$encrypted_dsi" "$repo/roms/default.nds"
-
-    ./compile.sh || error_exit "Firmware compilation failed (DSi ntrboot)"
-
-    uf2=$(find_artifact "$repo/build" "*.uf2")
-    cp -v "$uf2" "$OUT_BASE/ntrboot/DSpico_ntrboot_dsi.uf2"
-    info "✓ DSi ntrboot firmware built: DSpico_ntrboot_dsi.uf2"
-  else
-    warn "⊗ DSi ntrboot skipped (inputs/ntrboot/dsimode.nds not found)"
-  fi
-
-  write_build_info "$repo" "$OUT_BASE/ntrboot" "dspico-firmware (ntrboot)"
 }
 
 # ── [6/9] Pico Loader ────────────────────────────────────────────────────────
@@ -473,12 +398,25 @@ step_firmware_ntrboot() {
 
   local built_any=0
 
-  # 3DS ntrboot: boot9strap_ntr.firm → roms/default.nds
+  # 3DS ntrboot: boot9strap_ntr.firm → convert to .nds → roms/default.nds
   if [ -f /inputs/ntrboot/boot9strap_ntr.firm ]; then
     info "Building 3DS ntrboot firmware..."
+
+    # Convert .firm to .nds using firm-to-nds-dspico
+    local firm_tool=/tmp/firm-to-nds-dspico
+    if [ ! -d "$firm_tool" ]; then
+      git clone https://github.com/amt911/firm-to-nds-dspico.git "$firm_tool"
+    fi
+    local ntrboot_nds="/tmp/ntrboot_default.nds"
+    python3 "$firm_tool/firm_to_nds.py" /inputs/ntrboot/boot9strap_ntr.firm "$ntrboot_nds" \
+      || error_exit "firm-to-nds conversion failed for boot9strap_ntr.firm"
+    [ -f "$ntrboot_nds" ] || error_exit "firm-to-nds did not produce output file"
+    info "  ✓ Converted boot9strap_ntr.firm → default.nds"
+
     rm -f roms/*.nds
     rm -rf build
-    cp -v /inputs/ntrboot/boot9strap_ntr.firm roms/default.nds
+    cp -v "$ntrboot_nds" roms/default.nds
+    cp -v "$ntrboot_nds" "$OUT_BASE/firmware/default_ntrboot_3ds.nds"  # also save the .nds for reference
     chmod +x compile.sh
     ./compile.sh || error_exit "3DS ntrboot firmware compilation failed"
     local uf2_3ds
@@ -532,11 +470,6 @@ main() {
   step_pico_launcher
   step_assemble_sd
   step_firmware_ntrboot
-
-  # Build ntrboot firmware variant if enabled
-  if [ "${ENABLE_NTRBOOT:-0}" = "1" ]; then
-    step_firmware_ntrboot
-  fi
 
   echo ""
   info "════════════════════════════════════════"

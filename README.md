@@ -1,342 +1,272 @@
 # DSpico Resources Compiler
 
-Automated Docker-based build system for compiling all DSpico components and assembling the SD card structure.
+Build a combined DSpico firmware package from local input files, latest release
+assets, and patched upstream firmware sources.
 
-## Prerequisites
+## Inputs
 
-1. **Linux or WSL** environment
-2. **Docker** installed and running
-3. **Blowfish encryption tables** (see below)
+Prepare the local input files before building:
 
-## Quick Start
+- required binary inputs such as Blowfish tables, WRFU, and DSi ntrboot
+  payloads
+- BIOS files used by Pico Loader and GBARunner2
+- unpinned generated/downloaded inputs such as boot9strap NTR FIRM
+- latest release assets used directly by the build:
+  - `DSpico.dldi`
+  - `Pico_Loader_DSPICO.zip`
+  - `Pico_Launcher.zip`
+  - `mass-storage.nds`
+  - `GBARunner2.nds`
 
-### 1. Obtain Blowfish Tables (REQUIRED)
+The build does not vendor upstream source repositories. It clones only the
+repositories that still need to be built or patched.
 
-The bootloader must be encrypted with Nintendo DS Blowfish keys. These can be **legally obtained** from a DS/DSi console you own.
+## Prepare Inputs
 
-⚠️ **Legal Note:** You must own a physical DS/DSi console to legally possess these files. Downloading them from the internet may violate copyright laws in your jurisdiction.
-
-#### Quick Verification
+Run:
 
 ```bash
-# Check if your files are valid
-./verify_blowfish.sh
-
-# Try to extract Blowfish from BIOS dumps (if they don't match expected SHA1)
-./extract_blowfish.sh inputs/blowfish/biosnds7.rom
-
-# Search for valid Blowfish patterns in large dumps
-./find_blowfish.sh inputs/blowfish/biosnds7.rom
+bash scripts/fetch_inputs.sh
 ```
 
-#### Option A: Use GodMode9 on 3DS (MOST RELIABLE)
+If GitHub API rate limiting blocks latest-release lookup, pass a token:
 
-If you have a hacked 3DS, this is the best method:
-
-1. Follow https://3ds.hacks.guide/ to install custom firmware
-2. Boot GodMode9
-3. Navigate to `[M:] MEMORY VIRTUAL`
-4. Dump `boot9.bin`
-5. Extract with https://github.com/d0k3/boot9strap/releases (boot9_prot extractor)
-6. Use the extracted ARM7 BIOS
-
-#### Option B: Extract from BIOS dumps
-
-Place your BIOS files in `inputs/blowfish/`:
-- `biosnds7.rom` - DS ARM7 BIOS (16 KB, SHA1: `24f67bdea115a2c847c8813a262502ee1607b7df`)
-- `biosdsi7.rom` - DSi ARM7 BIOS (64 KB, SHA1: `c7c7570bfe51c3c7c5da3b01331b94e7e7cb4f53`)
-
-**OR** the extracted Blowfish tables:
-- `ntrBlowfish.bin` (4256 bytes, SHA1: `84e467f2485078e401a17a5f231e3fe6e9686648`)
-- `twlBlowfish.bin` (4096 bytes, SHA1: `2dea11191f28c6cc1956dadb8941affd4b2b5102`)
-
-#### Option C: Use extracted files (if SHA1 doesn't match)
-
-If your BIOS dumps don't match expected SHA1, **the build may still work**. DSRomEncryptor will attempt to use the files anyway. You can proceed and see if the firmware boots on real hardware.
-
-**Setup:**
 ```bash
-mkdir -p inputs/blowfish
-cp /path/to/biosnds7.rom inputs/blowfish/  # 16 KB or larger
-cp /path/to/biosdsi7.rom inputs/blowfish/  # 64 KB (optional, for DSi)
+GITHUB_TOKEN=ghp_xxx bash scripts/fetch_inputs.sh
 ```
 
-### 2. Build All Components
+`GH_TOKEN` is also accepted.
+
+This downloads:
+
+```text
+inputs/blowfish/ntrBlowfish.bin
+inputs/blowfish/twlBlowfish.bin
+inputs/wrfuxxed/dsimode.nds
+inputs/bios/biosnds7.rom
+inputs/bios/bios.bin
+inputs/ntrboot/boot9strap_ntr.firm
+inputs/ntrboot/default.gcd
+inputs/releases/DSpico.dldi
+inputs/releases/Pico_Loader_DSPICO.zip
+inputs/releases/Pico_Launcher.zip
+inputs/releases/mass-storage.nds
+inputs/releases/GBARunner2.nds
+```
+
+The fixed non-release payloads are SHA1-verified. Release assets and boot9strap
+use latest upstream releases and are not version-locked.
+
+## Input Download Reference
+
+`scripts/fetch_inputs.sh` downloads these files. The URLs are documented here
+so the files can also be prepared or replaced manually.
+
+| File | Destination | URL | SHA1 policy |
+| --- | --- | --- | --- |
+| WRFU Tester v0.60 fixed | `inputs/wrfuxxed/dsimode.nds` | `https://archive.org/download/wrfu_0.60_fixed/wrfu.srl` | `2d65fb7a0c62a4f08954b98c95f42b804fccfd26` |
+| NTR Blowfish table | `inputs/blowfish/ntrBlowfish.bin` | `https://github.com/DS-Homebrew/nds-bootstrap/raw/342b9408f761c1f3f03aac154c9e0aab1707e10f/retail/nitrofiles/encr_data.bin` | `84e467f2485078e401a17a5f231e3fe6e9686648` |
+| TWL Blowfish table | `inputs/blowfish/twlBlowfish.bin` | `https://github.com/DS-Homebrew/nds-bootstrap/raw/342b9408f761c1f3f03aac154c9e0aab1707e10f/retail/nitrofiles/dsi_encr_data.bin` | `2dea11191f28c6cc1956dadb8941affd4b2b5102` |
+| DS ARM7 BIOS | `inputs/bios/biosnds7.rom` | `https://archive.org/download/nds-bios-firmware/bios7.bin` | `24f67bdea115a2c847c8813a262502ee1607b7df` |
+| GBA BIOS | `inputs/bios/bios.bin` | `https://archive.org/download/gba_bios_202501/gba_bios.zip` (`gba_bios.bin` inside zip) | `300c20df6731a33952ded8c436f7f186d25d3492` |
+| boot9strap NTR FIRM | `inputs/ntrboot/boot9strap_ntr.firm` | latest `boot9strap-*-ntr.zip` from `https://api.github.com/repos/SciresM/boot9strap/releases/latest` | latest release, not pinned |
+| DSi ntrboot GCD | `inputs/ntrboot/default.gcd` | `https://wiki.ds-homebrew.com/assets/files/default.gcd` | `eca89918bbff09090a43e67f2805d9743e2ac343` |
+| DSpico DLDI | `inputs/releases/DSpico.dldi` | `https://github.com/LNH-team/dspico-dldi/releases/latest/download/DSpico.dldi` | latest release, not pinned |
+| Pico Loader DSPICO package | `inputs/releases/Pico_Loader_DSPICO.zip` | `https://github.com/LNH-team/pico-loader/releases/latest/download/Pico_Loader_DSPICO.zip` | latest release, not pinned |
+| Pico Launcher package | `inputs/releases/Pico_Launcher.zip` | `https://github.com/LNH-team/pico-launcher/releases/latest/download/Pico_Launcher.zip` | latest release, not pinned |
+| DSpico USB mass storage tool | `inputs/releases/mass-storage.nds` | `https://github.com/LNH-team/dspico-usb-examples/releases/latest/download/mass-storage.nds` | latest release, not pinned |
+| GBARunner2 | `inputs/releases/GBARunner2.nds` | latest `GBARunner2_arm9dldi_ds.nds` from `https://api.github.com/repos/Gericom/GBARunner2/releases/latest`, renamed locally | latest release, not pinned |
+
+## Source Repositories Used During Build
+
+These repositories are cloned inside the build container:
+
+- `dspico-bootloader`
+- `DSRomEncryptor`
+- `dspico-wrfuxxed`
+- `dspico-firmware`
+- `firm-to-nds`
+
+The following components are used from release assets instead of source builds:
+
+- `dspico-dldi`
+- `pico-loader`
+- `pico-launcher`
+- `dspico-usb-examples` mass storage tool
+- `GBARunner2`
+
+## Firmware Patch Inputs
+
+By default, `dspico-firmware` is cloned from upstream `develop` without merging
+extra refs. Specify firmware PRs manually for builds that need them.
+
+Known useful upstream PR refs:
+
+- `pull/8/head`: ntrboot auto detection
+- `pull/18/head`: auto-enable WRFUxxed when `uartBufv060.bin` exists
+- `pull/19/head`: Pico SDK 2.x compatibility
+
+Build with those PRs:
 
 ```bash
+DSPICO_FIRMWARE_EXTRA_REFS="pull/8/head pull/18/head pull/19/head" \
+ENABLE_WRFUXXED=1 ENABLE_NTRBOOT=1 \
 ./build_resources.sh
 ```
 
-This will:
-1. Build Docker image with all dependencies
-2. Compile DLDI driver
-3. Build and patch bootloader
-4. Encrypt bootloader with Blowfish keys
-5. Compile firmware (`.uf2` for Raspberry Pi Pico)
-6. Build Pico Loader
-7. Build Pico Launcher
-8. Assemble SD card structure in `outputs/dspico/sd_card/`
-
-### 3. Optional: Enable WRFUxxed Exploit
-
-WRFUxxed allows booting DSpico on **unmodified DSi and 3DS** systems.
-
-**How to obtain WRFU Tester v0.60:**
-
-The WRFU Tester ROM is created by Gericom and is distributed as part of the WRFUxxed exploit. You can find it through the DSi homebrew community:
-
-1. Go to the [DS(i) Mode Hacking](https://discord.gg/yD3spjv) Discord server or the [DSpico Discord](https://discord.gg/dspico)
-2. Look for `wrfu_tester_v060.nds` in the resources/releases channels
-3. Verify SHA-1: `2d65fb7a0c62a4f08954b98c95f42b804fccfd26`
-
-**Setup:**
-```bash
-mkdir -p inputs/wrfuxxed
-cp /path/to/wrfu_tester_v060.nds inputs/wrfuxxed/dsimode.nds
-```
-
-**Build with WRFUxxed:**
-```bash
-ENABLE_WRFUXXED=1 ./build_resources.sh
-```
-
-The `uartBufv060.bin` file will be automatically generated during the build process.
-
-### 4. Optional: Enable ntrboot (DSi / 3DS CFW install)
-
-ntrboot allows using DSpico as a **ntrboot flashcart** to install custom firmware ([boot9strap](https://3ds.hacks.guide/) on 3DS, or [Unlaunch](https://dsi.cfw.guide/) on DSi) **without any pre-existing software modification** on the target console.
-
-The LNH-team firmware has **2 ROM slots** (`default.nds` + `dsimode.nds`), so the build system produces **separate firmware files** for each ntrboot variant: `DSpico_ntrboot_3ds.uf2` and `DSpico_ntrboot_dsi.uf2`. Flash the one you need when using ntrboot, then flash the normal `DSpico.uf2` back for regular use.
-
-#### Required ntrboot files
-
-| File | Destination | Description |
-|------|-------------|-------------|
-| `boot9strap_ntr.firm` | `inputs/ntrboot/boot9strap_ntr.firm` | **3DS ntrboot.** Raw, unmodified FIRM from boot9strap releases. Automatically converted to NDS format during build. |
-| `default.gcd` | `inputs/ntrboot/default.gcd` | **DSi ntrboot.** GCD-signed ROM. Only needed for DSi ntrboot. |
-
-#### How to obtain the files
-
-**3DS — `boot9strap_ntr.firm`:**
-1. Download `boot9strap_ntr.zip` from [boot9strap releases](https://github.com/SciresM/boot9strap/releases) (**v1.3** — not v1.4, as per [3ds.hacks.guide](https://3ds.hacks.guide/))
-2. Extract `boot9strap_ntr.firm` from the zip
-3. Place the **unmodified** `.firm` file in `inputs/ntrboot/` — do **not** modify it or convert it manually
-4. SHA1: `26bf0b603ec1c72fa648b27c5d547de05d447748`
-
-> The build system automatically converts `boot9strap_ntr.firm` to NDS format using [firm-to-nds](https://github.com/amt911/firm-to-nds) (prepends the required NDS header).
-
-**DSi — `default.gcd`:**
-1. Check the [DSpico Discord](https://discord.gg/dspico) or the [DS(i) Mode Hacking](https://discord.gg/yD3spjv) Discord
-2. SHA1: `eca89918bbff86090a43e67f2805d9743e2ac343`
-
-> ⚠️ **DSi ntrboot requires USB power:** The DSpico must be powered via USB (e.g., connected to a PC or USB charger) so the firmware boots **before** the DSi starts its ntrboot sequence.
-
-#### ntrboot setup and build
+Override sources with environment variables:
 
 ```bash
-mkdir -p inputs/ntrboot
-
-# 3DS ntrboot (raw .firm file, converted automatically)
-cp /path/to/boot9strap_ntr.firm inputs/ntrboot/
-
-# DSi ntrboot (optional)
-cp /path/to/default.gcd inputs/ntrboot/
+DSPICO_FIRMWARE_REPO=https://github.com/yourname/dspico-firmware.git \
+DSPICO_FIRMWARE_REF=my-branch \
+ENABLE_WRFUXXED=1 ENABLE_NTRBOOT=1 \
+./build_resources.sh
 ```
 
-**Build with everything (recommended):**
-```bash
-ENABLE_WRFUXXED=1 ENABLE_NTRBOOT=1 ./build_resources.sh
+Available source overrides:
+
+```text
+DSPICO_BOOTLOADER_REPO
+DSPICO_BOOTLOADER_REF
+DSROMENCRYPTOR_REPO
+DSROMENCRYPTOR_REF
+DSPICO_WRFUXXED_REPO
+DSPICO_WRFUXXED_REF
+DSPICO_FIRMWARE_REPO
+DSPICO_FIRMWARE_REF
+DSPICO_FIRMWARE_EXTRA_REFS
+FIRM_TO_NDS_REPO
+FIRM_TO_NDS_REF
 ```
 
-This produces:
-- `outputs/dspico/firmware/DSpico.uf2` — Normal firmware (bootloader + WRFUxxed)
-- `outputs/dspico/firmware/DSpico_ntrboot_3ds.uf2` — 3DS ntrboot firmware
-- `outputs/dspico/firmware/DSpico_ntrboot_dsi.uf2` — DSi ntrboot firmware
+`DSPICO_FIRMWARE_EXTRA_REFS` is a space-separated list of refs fetched from the
+same firmware repository and merged in order.
 
-## Output Structure
+## Build
 
-After building, you'll find:
+On a Docker-capable Linux/x86_64 machine:
 
-```
-outputs/dspico/
-├── bootloader/
-│   └── BOOTLOADER.nds          # DLDI-patched bootloader
-├── dldi/
-│   └── DSpico.dldi             # DLDI driver
-├── encryptor/
-│   └── default.nds             # Encrypted bootloader
-├── firmware/
-│   ├── DSpico.uf2              # ⭐ Normal firmware (bootloader + WRFUxxed)
-│   ├── DSpico_ntrboot_3ds.uf2  # 3DS ntrboot (if ENABLE_NTRBOOT=1)
-│   └── DSpico_ntrboot_dsi.uf2  # DSi ntrboot (if ENABLE_NTRBOOT=1)
-├── pico-loader/
-│   ├── picoLoader7.bin
-│   ├── picoLoader9_DSPICO.bin
-│   ├── aplist.bin
-│   ├── savelist.bin
-│   └── patchlist.bin
-├── pico-launcher/
-│   ├── LAUNCHER.nds
-│   └── _pico/                  # Theme files
-├── wrfuxxed/                   # (if ENABLE_WRFUXXED=1)
-│   └── uartBufv060.bin
-└── sd_card/                    # ⭐ READY TO COPY TO SD CARD
-    ├── _picoboot.nds
-    └── _pico/
-        ├── themes/
-        ├── picoLoader7.bin
-        ├── picoLoader9.bin
-        ├── aplist.bin
-        └── savelist.bin
-```
-
-> With `ENABLE_NTRBOOT=1`, separate ntrboot `.uf2` files are produced for 3DS and DSi. Flash the appropriate one when using ntrboot, then flash `DSpico.uf2` back for normal use.
-
-## Usage
-
-### Flash the Firmware to DSpico
-
-1. Connect DSpico to PC while holding BOOTSEL button
-2. Copy `outputs/dspico/firmware/DSpico.uf2` to the USB drive that appears
-3. DSpico will reboot with new firmware
-
-### Prepare SD Card
-
-1. Format your microSD card (FAT32, 32KB cluster size recommended)
-   - **DO NOT use Windows built-in formatter**
-   - Use: https://dsi.cfw.guide/sd-card-setup.html
-
-2. Copy SD card contents:
-```bash
-cp -r outputs/dspico/sd_card/* /path/to/your/sdcard/
-```
-
-3. Add your DS ROMs:
-```bash
-mkdir /path/to/your/sdcard/roms
-cp /path/to/your/games/*.nds /path/to/your/sdcard/roms/
-```
-
-### Boot DSpico
-
-1. Insert microSD into DSpico
-2. Insert DSpico into your DS/DSi/3DS
-3. Power on
-
-**On DS Lite / DS Phat:**
-- Launch DSpico from menu
-
-**On DSi/3DS with WRFUxxed:**
-- Pico Launcher will auto-boot after exploit runs
-
-### Use ntrboot to install CFW
-
-If you built with `ENABLE_NTRBOOT=1`:
-
-1. **For 3DS:** Flash `DSpico_ntrboot_3ds.uf2` to DSpico, then follow the [ntrboot section of 3ds.hacks.guide](https://3ds.hacks.guide/ntrboot)
-2. **For DSi:** Flash `DSpico_ntrboot_dsi.uf2` to DSpico, connect to USB power before powering on the DSi, then follow [dsi.cfw.guide](https://dsi.cfw.guide/)
-3. Once CFW is installed, flash `DSpico.uf2` back to restore normal firmware for games
-
-## All Input Files Summary
-
-Complete reference of all files you may need to provide:
-
-| File | Destination | Required? | Description |
-|------|-------------|-----------|-------------|
-| DS ARM7 BIOS | `inputs/blowfish/biosnds7.rom` | **Yes** (or `ntrBlowfish.bin`) | 16 KB, for bootloader encryption |
-| DSi ARM7 BIOS | `inputs/blowfish/biosdsi7.rom` | Recommended | 64 KB, for TWL blowfish keys |
-| NTR Blowfish | `inputs/blowfish/ntrBlowfish.bin` | Alt. to BIOS | 4256 bytes, extracted blowfish table |
-| TWL Blowfish | `inputs/blowfish/twlBlowfish.bin` | Alt. to BIOS | 4096 bytes, extracted blowfish table |
-| WRFU Tester v0.60 | `inputs/wrfuxxed/dsimode.nds` | If `ENABLE_WRFUXXED=1` | WRFUxxed exploit ROM |
-| boot9strap NTR FIRM | `inputs/ntrboot/boot9strap_ntr.firm` | If `ENABLE_NTRBOOT=1` (3DS) | Raw, unmodified FIRM — automatically converted to NDS format |
-| DSi ntrboot GCD ROM | `inputs/ntrboot/default.gcd` | If `ENABLE_NTRBOOT=1` (DSi) | GCD-signed ROM, copied as-is into firmware |
-
-## Troubleshooting
-
-### ❌ "Blowfish tables not found"
-- Make sure `biosnds7.rom` or `ntrBlowfish.bin` is in `inputs/blowfish/`
-- These must be extracted from a DS/DSi console you own
-
-### ❌ "No .dldi file produced"
-- Check Docker logs for compilation errors
-- Ensure BlocksDS tools are installed in Docker image
-
-### ❌ "Firmware compilation failed"
-- Verify `default.nds` was created in `outputs/dspico/encryptor/`
-- Check that Blowfish encryption succeeded
-
-### ❌ DSpico not detected by console
-- Bootloader may not be properly encrypted
-- Verify you used correct Blowfish keys
-- Try rebuilding firmware in `RelWithDebInfo` mode
-
-### ❌ ntrboot not working on DSi
-- DSpico **must be powered via USB** — the firmware needs to boot before the DSi starts its ntrboot sequence
-- Verify `inputs/ntrboot/default.gcd` is a properly signed GCD ROM
-- Verify SHA1: `eca89918bbff86090a43e67f2805d9743e2ac343`
-
-### ❌ ntrboot not working on 3DS
-- Verify `inputs/ntrboot/boot9strap_ntr.firm` is the **unmodified** raw FIRM file from boot9strap releases
-- Do **not** manually convert or modify the `.firm` file — the build system handles the conversion automatically
-- Make sure you have `boot9strap_ntr.firm` (the **NTR** variant, not regular `boot9strap.firm`)
-- Use **v1.3** from [boot9strap releases](https://github.com/SciresM/boot9strap/releases) (not v1.4)
-- Verify SHA1: `26bf0b603ec1c72fa648b27c5d547de05d447748`
-- The file must be at `inputs/ntrboot/boot9strap_ntr.firm`
-
-### ❌ "Failed to mount SD card" (blue screen)
-- SD card may be corrupted or incompatible
-- Reformat using proper tool (see SD card setup guide)
-- Try a different SD card
-
-### ❌ "Failed to open Pico Loader" (red screen)
-- Check that `_pico/picoLoader7.bin` and `_pico/picoLoader9.bin` exist
-- Verify SD card structure matches expected layout
-
-## Advanced Configuration
-
-### Custom Input/Output Directories
+Use upstream `dspico-firmware` with the useful PRs merged at build time:
 
 ```bash
+DSPICO_FIRMWARE_EXTRA_REFS="pull/8/head pull/18/head pull/19/head" \
+ENABLE_WRFUXXED=1 ENABLE_NTRBOOT=1 \
+./build_resources.sh
+```
+
+Use the maintained fork with those changes already merged:
+
+```bash
+DSPICO_FIRMWARE_REPO=https://github.com/dev-soragoto/dspico-firmware.git \
+DSPICO_FIRMWARE_REF=develop \
+ENABLE_WRFUXXED=1 ENABLE_NTRBOOT=1 \
+./build_resources.sh
+```
+
+Optional custom paths:
+
+```bash
+DSPICO_FIRMWARE_REPO=https://github.com/dev-soragoto/dspico-firmware.git \
+DSPICO_FIRMWARE_REF=develop \
+ENABLE_WRFUXXED=1 ENABLE_NTRBOOT=1 \
 ./build_resources.sh /path/to/inputs /path/to/outputs
 ```
 
-### Docker Image Name
+## GitHub Actions
 
-```bash
-IMAGE_NAME=my-dspico-compiler:v1 ./build_resources.sh
+Run **Build DSpico Package** from the Actions tab. The workflow is manual only
+and uploads two artifacts:
+
+- `DSpico.uf2`
+- `sd_root` with the SD card root files
+
+Fill in the firmware source when starting the workflow.
+
+For upstream plus manually merged PR refs:
+
+```text
+firmware_repo: https://github.com/LNH-team/dspico-firmware.git
+firmware_ref: develop
+firmware_extra_refs: pull/8/head pull/18/head pull/19/head
 ```
 
-### Environment Variables
+To build from a fork with those changes already merged, use:
 
-```bash
-DLDITOOL=/custom/path/to/dlditool \
-ENABLE_WRFUXXED=1 \
-ENABLE_NTRBOOT=1 \
-IMAGE_NAME=custom:latest \
-./build_resources.sh
+```text
+firmware_repo: https://github.com/dev-soragoto/dspico-firmware.git
+firmware_ref: develop
+firmware_extra_refs:
 ```
 
-> `ENABLE_WRFUXXED` and `ENABLE_NTRBOOT` can be combined. Both flags are additive.
+## ntrboot Auto Detection
 
-## Components Built
+With `ENABLE_NTRBOOT=1`, the build embeds ntrboot images using the names
+expected by the firmware auto-detection feature:
 
-This script automatically clones and builds:
+- `inputs/ntrboot/boot9strap_ntr.firm` is converted to `roms/ntrboot.nds`
+- `inputs/ntrboot/default.gcd` is copied to `roms/ntrbootdsi.nds` when the 3DS
+  ntrboot image also exists
 
-1. [dspico-dldi](https://github.com/LNH-team/dspico-dldi) - DLDI driver
-2. [dspico-bootloader](https://github.com/LNH-team/dspico-bootloader) - Cartridge bootloader
-3. [DSRomEncryptor](https://github.com/Gericom/DSRomEncryptor) - ROM encryption tool
-4. [dspico-wrfuxxed](https://github.com/LNH-team/dspico-wrfuxxed) - DSi/3DS exploit (optional)
-5. [dspico-firmware](https://github.com/LNH-team/dspico-firmware) - Raspberry Pi Pico firmware
-6. [pico-loader](https://github.com/LNH-team/pico-loader) - Game loader
-7. [pico-launcher](https://github.com/LNH-team/pico-launcher) - UI launcher
-8. [firm-to-nds](https://github.com/amt911/firm-to-nds) - FIRM to NDS converter (for ntrboot)
+Both files are required when `ENABLE_NTRBOOT=1`; the build fails immediately if
+either input is missing.
 
-## License
+With `ENABLE_WRFUXXED=1`, `inputs/wrfuxxed/dsimode.nds` is also required. The
+build fails immediately if it is missing.
 
-Each component has its own license. Please check individual repositories.
+The old separate `DSpico_ntrboot_3ds.uf2` and `DSpico_ntrboot_dsi.uf2` outputs
+are not expected with the auto-detection firmware.
 
-## Credits
+## Outputs
 
-- LNH-team for DSpico hardware and software
-- Gericom for DSRomEncryptor and WRFUxxed exploit
-- BlocksDS team for development tools
+Primary outputs are written under:
+
+```text
+outputs/dspico/
+├── firmware/
+│   └── DSpico.uf2
+├── sd_card/
+│   ├── _picoboot.nds
+│   ├── _pico/
+│   │   ├── aplist.bin
+│   │   ├── patchlist.bin
+│   │   ├── picoLoader7.bin
+│   │   ├── picoLoader9.bin
+│   │   ├── savelist.bin
+│   │   ├── biosnds7.rom
+│   │   └── themes/
+│   ├── Emulators/
+│   │   └── GBARunner2.nds
+│   ├── gba/
+│   ├── nds/
+│   ├── dsi/
+│   ├── bios.bin
+│   └── roms/mass-storage.nds
+├── bootloader/
+├── dldi/
+├── encryptor/
+├── ntrboot/
+├── pico-loader/
+├── pico-launcher/
+└── wrfuxxed/
+```
+
+Use `outputs/dspico/firmware/DSpico.uf2` as the combined firmware. Copy
+`outputs/dspico/sd_card/` to the SD card.
+
+Suggested ROM placement:
+
+- put GBA games in `gba/`
+- put NDS games in `nds/`
+- put DSiWare and DSi-related `.nds` files in `dsi/`
+
+`Emulators/GBARunner2.nds` is the upstream `GBARunner2_arm9dldi_ds.nds` build
+renamed for the SD card. This is the DS-mode DLDI build, which matches the
+DSpico flashcard use case.
+
+## Notes
+
+- Run `scripts/fetch_inputs.sh` again when refreshing local inputs.
+- Release assets use latest versions by default. If upstream changes break the
+  package layout, pin or replace the file in `inputs/releases/` manually.
+- GBARunner3 is not included because it currently has no stable release assets
+  to download.

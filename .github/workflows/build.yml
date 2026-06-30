@@ -1,0 +1,75 @@
+name: Build DSpico Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      firmware_repo:
+        description: "dspico-firmware repository URL"
+        required: true
+      firmware_ref:
+        description: "dspico-firmware ref"
+        required: true
+      firmware_extra_refs:
+        description: "Extra firmware refs to merge, space-separated"
+        required: false
+        default: ""
+      enable_wrfuxxed:
+        description: "Build with WRFUxxed support"
+        required: true
+        type: choice
+        options:
+          - "1"
+          - "0"
+        default: "1"
+      enable_ntrboot:
+        description: "Build with ntrboot support"
+        required: true
+        type: choice
+        options:
+          - "1"
+          - "0"
+        default: "1"
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    permissions:
+      contents: read
+
+    env:
+      DSPICO_FIRMWARE_REPO: ${{ inputs.firmware_repo }}
+      DSPICO_FIRMWARE_REF: ${{ inputs.firmware_ref }}
+      DSPICO_FIRMWARE_EXTRA_REFS: ${{ inputs.firmware_extra_refs }}
+      ENABLE_WRFUXXED: ${{ inputs.enable_wrfuxxed }}
+      ENABLE_NTRBOOT: ${{ inputs.enable_ntrboot }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare inputs
+        run: bash scripts/fetch_inputs.sh
+
+      - name: Build resources
+        run: ./build_resources.sh
+
+      - name: Fix output ownership
+        run: sudo chown -R "$(id -u):$(id -g)" outputs
+
+      - name: Upload UF2
+        uses: actions/upload-artifact@v4
+        with:
+          name: DSpico.uf2
+          path: outputs/dspico/firmware/DSpico.uf2
+          if-no-files-found: error
+
+      - name: Upload SD root
+        uses: actions/upload-artifact@v4
+        with:
+          name: sd_root
+          path: outputs/dspico/sd_card/
+          if-no-files-found: error

@@ -1,7 +1,3 @@
-# Ignore all files in inputs and subdirectories
-inputs/**
-# But keep the directory structure (allow directories and .gitkeep files)
-!inputs/**/
-!inputs/**/.gitkeep
-
 outputs/
+inputs/releases/
+inputs/ntrboot/boot9strap_ntr.firm

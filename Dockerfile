@@ -7,6 +7,7 @@ RUN apt-get update \
 		 ca-certificates \
 		 curl \
 		 tar \
+		 unzip \
 		 bash \
 		 sudo \
 		 python3 \

@@ -1,3 +1,5 @@
 outputs/
-inputs/releases/
-inputs/ntrboot/boot9strap_ntr.firm
+inputs/**
+!inputs/
+!inputs/**/
+!inputs/**/.gitkeep
